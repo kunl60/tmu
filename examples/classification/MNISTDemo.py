@@ -3,7 +3,7 @@ import argparse
 
 import numpy as np
 
-from tmu.data import MNIST
+from tmu.data.fashion_mnist import KuzushijiMNIST
 from tmu.models.classification.vanilla_classifier import TMClassifier
 from tmu.tools import BenchmarkTimer
 from tmu.util.cuda_profiler import CudaProfiler
@@ -20,7 +20,7 @@ def metrics(args):
 
 def main(args):
     experiment_results = metrics(args)
-    data = MNIST().get()
+    data = KuzushijiMNIST().get()
 
     tm = TMClassifier(
         type_iii_feedback=False,
@@ -60,18 +60,21 @@ def main(args):
         if args.platform == "CUDA":
             CudaProfiler().print_timings(benchmark=benchmark_total)
 
+    tm.save_clauses_txt("clauses_final.txt")
+
+
     return experiment_results
 
 
 def default_args(**kwargs):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--num_clauses", default=2000, type=int)
-    parser.add_argument("--T", default=5000, type=int)
-    parser.add_argument("--s", default=10.0, type=float)
+    parser.add_argument("--num_clauses", default=100, type=int)
+    parser.add_argument("--T", default=100, type=int)
+    parser.add_argument("--s", default=100.0, type=float)
     parser.add_argument("--max_included_literals", default=32, type=int)
     parser.add_argument("--platform", default="CPU", type=str, choices=["CPU", "CPU_sparse", "CUDA"])
     parser.add_argument("--weighted_clauses", default=True, type=bool)
-    parser.add_argument("--epochs", default=60, type=int)
+    parser.add_argument("--epochs", default=200, type=int)
     args = parser.parse_args()
     for key, value in kwargs.items():
         if key in args.__dict__:

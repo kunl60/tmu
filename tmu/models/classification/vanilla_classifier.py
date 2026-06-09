@@ -17,7 +17,6 @@
 # SOFTWARE.
 import typing
 
-
 from tmu.models.base import MultiClauseBankMixin, MultiWeightBankMixin, TMBaseModel
 from tmu.util.encoded_data_cache import DataEncoderCache
 from tmu.util.statistics import MetricRecorder
@@ -60,7 +59,8 @@ class TMClassifier(TMBaseModel, MultiClauseBankMixin, MultiWeightBankMixin):
             literal_sampling=1.0,
             feedback_rate_excluded_literals=1,
             literal_insertion_state=-1,
-            seed=None
+            seed=None,
+            use_minimal_feedback=True
     ):
         super().__init__(
             number_of_clauses,
@@ -96,6 +96,7 @@ class TMClassifier(TMBaseModel, MultiClauseBankMixin, MultiWeightBankMixin):
         )
         MultiClauseBankMixin.__init__(self, seed=seed)
         MultiWeightBankMixin.__init__(self, seed=seed)
+        self.use_minimal_feedback = use_minimal_feedback
 
         # These data structures cache the encoded data for the training and test sets. It also makes a fast-check if
         # training data has changed, and only re-encodes if it has.
@@ -163,7 +164,12 @@ class TMClassifier(TMBaseModel, MultiClauseBankMixin, MultiWeightBankMixin):
                 )
 
         if self.type_i_feedback:
-            self.clause_banks[target].type_i_feedback(
+            feedback_fn = (
+                self.clause_banks[target].type_i_feedback_minimal
+                if self.use_minimal_feedback
+                else self.clause_banks[target].type_i_feedback
+            )
+            feedback_fn(
                 update_p=update_p * self.type_i_p,
                 clause_active=clause_active[target] * clause_a,
                 literal_active=literal_active,
@@ -591,6 +597,14 @@ class TMClassifier(TMBaseModel, MultiClauseBankMixin, MultiWeightBankMixin):
 
     def number_of_absorbed_include_actions(self, the_class, clause):
         return self.clause_banks[the_class].number_of_absorbed_include_actions(clause)
+
+    def save_clauses_txt(self, file_path: str = "clauses.txt"):
+        with open(file_path, "w") as f:
+            for class_idx in range(self.number_of_classes):
+                clause_literals = self.clause_banks[class_idx].get_literals()
+                for clause_idx, clause in enumerate(clause_literals):
+                    included = [i for i, val in enumerate(clause) if val == 1]
+                    f.write(f"Class {class_idx} - Clause {clause_idx}: {included}\n")
 
     def __getstate__(self):
         state = self.__dict__.copy()

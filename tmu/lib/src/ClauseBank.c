@@ -355,6 +355,176 @@ void cb_type_i_feedback(
 	}
 }
 
+/* Type I feedback that demotes clauses with partial or full overlap with the minimal literal set.
+ *
+ * Algorithm:
+ *  1. Pre-pass: randomly select clauses, compute clause output, find Type Ia candidates.
+ *  2. Among candidates, find min literal count -> build minimal_literal_set (union of their include bitmasks).
+ *  3. Feedback pass:
+ *       - Type Ib  if clause shares at least one literal with minimal_literal_set AND has extra literals
+ *                  beyond the overlap (partial or full overlap + extras).
+ *       - Type Ia  if clause has NO overlap with minimal_literal_set (completely different pattern)
+ *                  OR if clause has overlap but no extras (clause is a subset of min_set).
+ */
+void cb_type_i_feedback_minimal(
+        unsigned int *ta_state,
+        unsigned int *feedback_to_ta,
+        unsigned int *output_one_patches,
+        int number_of_clauses,
+        int number_of_literals,
+        int number_of_state_bits,
+        int number_of_patches,
+        float update_p,
+        float s,
+        unsigned int boost_true_positive_feedback,
+        unsigned int reuse_random_feedback,
+        unsigned int max_included_literals,
+        unsigned int *clause_active,
+        unsigned int *literal_active,
+        unsigned int *Xi
+)
+{
+	unsigned int filter;
+	if ((number_of_literals % 32) != 0) {
+		filter = (~(0xffffffff << (number_of_literals % 32)));
+	} else {
+		filter = 0xffffffff;
+	}
+	unsigned int number_of_ta_chunks = (number_of_literals - 1) / 32 + 1;
+
+	/* Allocate per-clause scratch arrays for the two-pass approach. */
+	unsigned int *selected   = (unsigned int *)calloc(number_of_clauses, sizeof(unsigned int));
+	unsigned int *clause_out = (unsigned int *)calloc(number_of_clauses, sizeof(unsigned int));
+	unsigned int *clause_pat = (unsigned int *)calloc(number_of_clauses, sizeof(unsigned int));
+	unsigned int *is_type1a  = (unsigned int *)calloc(number_of_clauses, sizeof(unsigned int));
+	int          *lit_count  = (int          *)calloc(number_of_clauses, sizeof(int));
+	unsigned int *minimal_literal_set = (unsigned int *)calloc(number_of_ta_chunks, sizeof(unsigned int));
+
+	/* --- Pre-pass: selection + clause output + Type Ia candidacy --- */
+	int min_count  = INT_MAX;
+	int has_type1a = 0;
+
+	for (int j = 0; j < number_of_clauses; j++) {
+		if ((((float)fast_rand()) / ((float)FAST_RAND_MAX) > update_p) || (!clause_active[j])) {
+			selected[j] = 0;
+			continue;
+		}
+		selected[j] = 1;
+
+		unsigned int clause_pos = j * number_of_ta_chunks * number_of_state_bits;
+		cb_calculate_clause_output_feedback(
+			&ta_state[clause_pos], output_one_patches,
+			&clause_out[j], &clause_pat[j],
+			number_of_ta_chunks, number_of_state_bits, filter,
+			number_of_patches, literal_active, Xi
+		);
+
+		if (clause_out[j]) {
+			int count = cb_number_of_include_actions(ta_state, j, number_of_literals, number_of_state_bits);
+			if (count <= (int)max_included_literals) {
+				is_type1a[j] = 1;
+				lit_count[j] = count;
+				has_type1a   = 1;
+				if (count < min_count) min_count = count;
+			}
+		}
+	}
+
+	/* --- Build minimal_literal_set from clauses with fewest literals --- */
+	/* If min_count == 0 the smallest clause is empty -> fall back to plain TM (all Type Ia). */
+	if (has_type1a && min_count > 0) {
+		for (int j = 0; j < number_of_clauses; j++) {
+			if (!is_type1a[j] || lit_count[j] != min_count) continue;
+			unsigned int clause_pos = j * number_of_ta_chunks * number_of_state_bits;
+			for (int k = 0; k < number_of_ta_chunks - 1; k++) {
+				unsigned int ta_pos = k * number_of_state_bits + number_of_state_bits - 1;
+				minimal_literal_set[k] |= ta_state[clause_pos + ta_pos];
+			}
+			unsigned int ta_pos = (number_of_ta_chunks - 1) * number_of_state_bits + number_of_state_bits - 1;
+			minimal_literal_set[number_of_ta_chunks - 1] |= ta_state[clause_pos + ta_pos] & filter;
+		}
+	}
+
+	/* plain_type1a: give all candidates Type Ia (empty set or no candidates) */
+	int use_plain_type1a = (!has_type1a) || (min_count == 0);
+
+	/* --- Feedback pass --- */
+	if (reuse_random_feedback && s > 1.0) {
+		cb_initialize_random_streams(feedback_to_ta, number_of_literals, number_of_ta_chunks, s);
+	}
+
+	for (int j = 0; j < number_of_clauses; j++) {
+		if (!selected[j]) continue;
+
+		unsigned int clause_pos = j * number_of_ta_chunks * number_of_state_bits;
+
+		if (!reuse_random_feedback && s > 1.0) {
+			cb_initialize_random_streams(feedback_to_ta, number_of_literals, number_of_ta_chunks, s);
+		}
+
+		int give_type1a = 0;
+
+		if (is_type1a[j]) {
+			if (use_plain_type1a) {
+				give_type1a = 1;
+			} else {
+				/* Type Ib if clause shares at least one literal with minimal_literal_set
+				 * AND has extra literals beyond the overlap.
+				 * Clauses with zero overlap get Type Ia -- different pattern entirely. */
+				int has_overlap = 0;
+				int has_extra   = 0;
+				for (int k = 0; k < (int)number_of_ta_chunks; k++) {
+					unsigned int ta_pos = k * number_of_state_bits + number_of_state_bits - 1;
+					unsigned int clause_include = ta_state[clause_pos + ta_pos];
+					unsigned int min_chunk      = minimal_literal_set[k];
+					if (k == (int)number_of_ta_chunks - 1) {
+						clause_include &= filter;
+						min_chunk      &= filter;
+					}
+					if (clause_include & min_chunk)   has_overlap = 1;
+					if (clause_include & ~min_chunk)  has_extra   = 1;
+				}
+				give_type1a = !(has_overlap && has_extra);
+			}
+		}
+
+		if (give_type1a) {
+			/* Type Ia Feedback */
+			unsigned int cp = clause_pat[j];
+			for (int k = 0; k < (int)number_of_ta_chunks; k++) {
+				unsigned int ta_pos = k * number_of_state_bits;
+				if (boost_true_positive_feedback == 1) {
+					cb_inc(&ta_state[clause_pos + ta_pos], literal_active[k] & Xi[cp * number_of_ta_chunks + k], number_of_state_bits);
+				} else {
+					cb_inc(&ta_state[clause_pos + ta_pos], literal_active[k] & Xi[cp * number_of_ta_chunks + k] & (~feedback_to_ta[k]), number_of_state_bits);
+				}
+				if (s > 1.0) {
+					cb_dec(&ta_state[clause_pos + ta_pos], literal_active[k] & (~Xi[cp * number_of_ta_chunks + k]) & feedback_to_ta[k], number_of_state_bits);
+				} else {
+					cb_dec(&ta_state[clause_pos + ta_pos], literal_active[k] & (~Xi[cp * number_of_ta_chunks + k]), number_of_state_bits);
+				}
+			}
+		} else {
+			/* Type Ib Feedback */
+			for (int k = 0; k < (int)number_of_ta_chunks; k++) {
+				unsigned int ta_pos = k * number_of_state_bits;
+				if (s > 1.0) {
+					cb_dec(&ta_state[clause_pos + ta_pos], literal_active[k] & feedback_to_ta[k], number_of_state_bits);
+				} else {
+					cb_dec(&ta_state[clause_pos + ta_pos], literal_active[k], number_of_state_bits);
+				}
+			}
+		}
+	}
+
+	free(selected);
+	free(clause_out);
+	free(clause_pat);
+	free(is_type1a);
+	free(lit_count);
+	free(minimal_literal_set);
+}
+
 void cb_type_ii_feedback(
         unsigned int *ta_state,
         unsigned int *output_one_patches,

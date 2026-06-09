@@ -13,13 +13,13 @@ _LOGGER = logging.getLogger(__name__)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--num_clauses", default=2000, type=int)
-    parser.add_argument("--T", default=5000//100, type=int)
-    parser.add_argument("--s", default=10.0, type=float)
+    parser.add_argument("--num_clauses", default=10, type=int)
+    parser.add_argument("--T", default=100, type=int)
+    parser.add_argument("--s", default=1000.0, type=float)
     parser.add_argument("--max_included_literals", default=32, type=int)
     parser.add_argument("--device", default="CPU", type=str)
-    parser.add_argument("--weighted_clauses", default=False, type=bool)
-    parser.add_argument("--epochs", default=60, type=int)
+    parser.add_argument("--weighted_clauses", default=True, type=bool)
+    parser.add_argument("--epochs", default=20, type=int)
     parser.add_argument("--type_i_ii_ratio", default=1.0, type=float)
 
     args = parser.parse_args()
@@ -60,14 +60,16 @@ if __name__ == "__main__":
         with benchmark_total:
             benchmark1 = BenchmarkTimer(logger=_LOGGER, text="Training Time")
             with benchmark1:
-                tm.fit(X_train, Y_train)
+                tm.fit(X_train.astype(np.uint32), Y_train.astype(np.uint32))
 
             benchmark2 = BenchmarkTimer(logger=_LOGGER, text="Testing Time")
             with benchmark2:
-                result = 100 * (tm.predict(X_test) == Y_test).mean()
+                result = 100 * (tm.predict(X_test.astype(np.uint32)) == Y_test).mean()
 
             _LOGGER.info(f"Epoch: {epoch + 1}, Accuracy: {result:.2f}, Training Time: {benchmark1.elapsed():.2f}s, "
                          f"Testing Time: {benchmark2.elapsed():.2f}s")
 
         if args.device == "CUDA":
             CudaProfiler().print_timings(benchmark=benchmark_total)
+
+    tm.save_clauses_txt("clauses_final.txt")
