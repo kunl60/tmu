@@ -35,7 +35,8 @@ def main(args):
         s=args.s,
         max_included_literals=args.max_included_literals,
         platform=args.platform,
-        weighted_clauses=args.weighted_clauses
+        weighted_clauses=args.weighted_clauses,
+        use_minimal_feedback=args.use_minimal_feedback
     )
 
     _LOGGER.info(f"Running {TMClassifier} for {args.epochs}")
@@ -56,18 +57,21 @@ def main(args):
 
         _LOGGER.info(f"Epoch: {epoch + 1}, Accuracy: {result:.2f}, Training Time: {benchmark1.elapsed():.2f}s, "
                      f"Testing Time: {benchmark2.elapsed():.2f}s")
+        
+    tm.save_clauses_txt("clauses_final.txt")
 
     return experiment_results
 
 def default_args(**kwargs):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--num_clauses", default=4, type=int)
+    parser.add_argument("--num_clauses", default=10, type=int)
     parser.add_argument("--T", default=10, type=int)
     parser.add_argument("--s", default=10.0, type=float)
     parser.add_argument("--max_included_literals", default=32, type=int)
     parser.add_argument("--platform", default="CPU", type=str)
     parser.add_argument("--weighted_clauses", default=True, type=bool)
     parser.add_argument("--epochs", default=60, type=int)
+    parser.add_argument("--use_minimal_feedback", default=True, type=int)
     args = parser.parse_args()
     for key, value in kwargs.items():
         if key in args.__dict__:

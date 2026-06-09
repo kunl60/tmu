@@ -60,7 +60,7 @@ class TMClassifier(TMBaseModel, MultiClauseBankMixin, MultiWeightBankMixin):
             feedback_rate_excluded_literals=1,
             literal_insertion_state=-1,
             seed=None,
-            use_minimal_feedback=True
+            use_minimal_feedback=False
     ):
         super().__init__(
             number_of_clauses,
