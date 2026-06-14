@@ -76,7 +76,7 @@ def default_args(**kwargs):
     parser.add_argument("--platform", default="CPU", type=str, choices=["CPU", "CPU_sparse", "CUDA"])
     parser.add_argument("--weighted_clauses", default=True, type=bool)
     parser.add_argument("--epochs", default=10, type=int)
-    parser.add_argument("--use_minimal_feedback", default=True, type=bool)
+    parser.add_argument("--use_minimal_feedback", default=False, type=bool)
     args = parser.parse_args()
     for key, value in kwargs.items():
         if key in args.__dict__:
